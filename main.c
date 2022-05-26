@@ -5,11 +5,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <termios.h>
 #if defined(__APPLE__) || defined(__unix__)
-  #define UNIX_CONSOLE 1
+  #define UNIX_CONSOLE
+  #include <termios.h>
+  struct termios def_info;
+//  #define NEWLINE "\n"
 #else
-  #define UNIX_CONSOLE 0
+  #define WINDOWS_CONSOLE
+  #include <windows.h>
+  #include <conio.h>
+//  #define NEWLINE "\r\n"
+  HANDLE hStdin;
+  DWORD mode = 0;
 #endif
 #define FIXED_POINT_PERCISION 3
 #define STACK_SIZE 256
@@ -21,9 +28,8 @@ int rpn_stack[STACK_SIZE], rpn_stk_index = 0;
 // the stack would be reset and ans would be the only value on stack.
 bool reset_status = false;
 
-struct termios def_info;
 
-typedef long num_t;
+typedef long long num_t;
 
 double disp_divider = 1.0;
 num_t  calc_divider = 1;
@@ -38,8 +44,9 @@ typedef enum _calc_oper
 {
   none = 0,
   plus, minus, multiply, divide,
-  quit, // Quit app
+  ce, // Discard current number
   ac, // Clear All
+  quit, // Quit app
   push = 0x80000000
 } calc_oper;
 
@@ -94,7 +101,11 @@ input_event get_input()
   ret.oper = none;
   while(1)
   {
+#ifdef WINDOWS_CONSOLE
+    c = _getch();
+#else
     c = getchar();
+#endif
 
     if(c >= '0' && c <= '9') // Numeric
     {
@@ -128,7 +139,9 @@ input_event get_input()
         reading_decimal = true;
         break;
       case ' ' :
+      case '\r': // Why would you do that, Windows
       case '\n': ret.oper |= push; goto commit_input; // Push onto stack
+      case '\\': ret.oper = ce; goto commit_input;
       case '_' : ret.input_number *= -1; putchar(c); input_length++; break; // Negate
       case '+' : ret.oper |= plus; goto commit_input;
       case '-' : ret.oper |= minus; goto commit_input;
@@ -159,7 +172,14 @@ commit_input:
   if(input_length == 0 && !(ret.oper & ~push)) // No operation, no number
     ret.oper = none;
   else if(c != '\n') // Print the operator
+  {
+#ifdef WINDOWS_CONSOLE
+    if(c == '\r')
+      printf("\r\n");
+    else
+#endif
     putchar(c);
+  }
 
   // Add trailing zeros to fixed point number
   for(i = 0; i < FIXED_POINT_PERCISION - decimal_place_length; i++)
@@ -174,21 +194,32 @@ int rpn_proc()
     printf("[%d] > ", rpn_stk_index);
     input_event input = get_input();
 
-    if(input.oper == quit)
-      return 0;
-    else if(input.oper == ac)
+    // First pass special values
+    switch(input.oper)
     {
-      rpn_reset(0);
-      putchar('\n');
-      continue;
+      case ce:
+        continue;
+      case quit:
+        return 0;
+      case ac:
+        rpn_reset(0);
+        putchar('\n');
+        continue;
+      default: break;
     }
 
     if(input.oper & ~push)
-      ans = rpn_pop();
+    {
+      num_t tmpans = rpn_pop();
+      if(!reset_status)
+        ans = tmpans;
+    }
 //    printf("<%8x>\n", input.oper);
     if(input.oper & push)
       rpn_push(input.input_number);
     input.oper &= ~push;
+
+
     switch(input.oper)
     {
       case plus:
@@ -217,25 +248,33 @@ int rpn_proc()
   }
 }
 
+
 void cleanup()
 {
+#ifdef UNIX_CONSOLE
   tcsetattr(0, TCSANOW, &def_info);
+#else
+  SetConsoleMode(hStdin, mode);
+#endif
 }
 
 int main()
 {
-  if(UNIX_CONSOLE)
-  {
-    struct termios info;
-    tcgetattr(0, &def_info);           /* get current terminal attirbutes; 0 is the file descriptor for stdin */
-    info = def_info;                   /* make a copy */
-    info.c_lflag &= ~ICANON & ~ECHO;   /* disable canonical mode and echo */
-    info.c_cc[VMIN] = 1;               /* wait until at least one keystroke available */
-    info.c_cc[VTIME] = 0;              /* no timeout */
-    tcsetattr(0, TCSANOW, &info);      /* set immediately */
+#ifdef UNIX_CONSOLE
+  struct termios info;
+  tcgetattr(0, &def_info);           /* get current terminal attirbutes; 0 is the file descriptor for stdin */
+  info = def_info;                   /* make a copy */
+  info.c_lflag &= ~ICANON & ~ECHO;   /* disable canonical mode and echo */
+  info.c_cc[VMIN] = 1;               /* wait until at least one keystroke available */
+  info.c_cc[VTIME] = 0;              /* no timeout */
+  tcsetattr(0, TCSANOW, &info);      /* set immediately */
 
-    atexit(cleanup);
-  }
+#elif defined(WINDOWS_CONSOLE)
+  hStdin = GetStdHandle(STD_INPUT_HANDLE);
+  GetConsoleMode(hStdin, &mode);
+  SetConsoleMode(hStdin, mode & ~ENABLE_ECHO_INPUT);
+#endif
+  atexit(cleanup);
   for(int i = 0; i < FIXED_POINT_PERCISION; i++)
     disp_divider *= 10, calc_divider *= 10;
   rpn_proc();
