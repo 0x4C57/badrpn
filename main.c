@@ -198,6 +198,7 @@ int rpn_proc()
     switch(input.oper)
     {
       case ce:
+        putchar('\n');
         continue;
       case quit:
         return 0;
@@ -236,7 +237,14 @@ int rpn_proc()
 
       case divide:
       {
-        rpn_push(ans * calc_divider / rpn_pop());
+        num_t divider = rpn_pop();
+        if(divider == 0)
+        {
+          puts("\nERROR: DIVIDE BY ZERO!");
+          rpn_push(ans);
+          continue;
+        }
+        rpn_push(ans * calc_divider / divider);
       }
       default: break;
     }
